@@ -1,0 +1,190 @@
+<div class="container">
+  <div class="card">
+    <h2 class="section-title">伝票Noで検索</h2>
+    <div class="search-row">
+      <input type="text" id="search-input" class="form-input" inputmode="numeric" placeholder="伝票Noを入力（部分一致可）" maxlength="6">
+      <button type="button" id="search-btn" class="btn btn-primary" style="width:auto;">検索</button>
+    </div>
+    <div class="form-help">伝票Noの一部または全部（6桁）を入力してください。</div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">検索結果</h2>
+    <div id="search-results">
+      <p class="empty-state">伝票Noを入力して「検索」を押してください</p>
+    </div>
+  </div>
+</div>
+
+<style>
+  .search-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .search-row .form-input {
+    flex: 1;
+  }
+  .search-row .btn {
+    flex: 0 0 80px;
+  }
+  .result-item {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-bottom: 8px;
+    background: #fff;
+  }
+  .result-customer {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--color-primary-dark);
+    margin-bottom: 4px;
+  }
+  .result-meta {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    line-height: 1.7;
+  }
+  .result-meta .label {
+    display: inline-block;
+    min-width: 5em;
+    color: var(--color-text-muted);
+  }
+  .result-meta .value {
+    color: var(--color-text);
+  }
+  .result-actions {
+    margin-top: 10px;
+    text-align: right;
+  }
+  .result-actions .btn {
+    padding: 8px 16px;
+    width: auto;
+    font-size: 14px;
+    min-height: 36px;
+  }
+</style>
+
+<script>
+const SearchPage = (function() {
+  let allRecords = [];
+  let loaded = false;
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function load(callback) {
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.success) {
+          allRecords = res.records || [];
+          loaded = true;
+          if (callback) callback();
+        } else {
+          document.getElementById('search-results').innerHTML =
+            '<p class="empty-state">データ取得に失敗しました</p>';
+        }
+      })
+      .withFailureHandler(err => {
+        document.getElementById('search-results').innerHTML =
+          '<p class="empty-state">通信エラー: ' + escapeHtml(err.message) + '</p>';
+      })
+      .getRecords();
+  }
+
+  function search() {
+    const q = document.getElementById('search-input').value.trim();
+    const container = document.getElementById('search-results');
+    if (!q) {
+      App.showToast('伝票Noを入力してください', 'error');
+      return;
+    }
+    if (!/^\d+$/.test(q)) {
+      App.showToast('伝票Noは数字で入力してください', 'error');
+      return;
+    }
+
+    const doSearch = () => {
+      const matches = allRecords.filter(r => {
+        const slips = String(r.slipNumbers || '').split('/');
+        return slips.some(s => s.indexOf(q) !== -1);
+      });
+      render(matches, q);
+    };
+
+    if (!loaded) {
+      container.innerHTML = '<p class="loading">読み込み中...</p>';
+      load(doSearch);
+    } else {
+      doSearch();
+    }
+  }
+
+  function render(matches, query) {
+    const container = document.getElementById('search-results');
+    if (matches.length === 0) {
+      container.innerHTML = '<p class="empty-state">「' + escapeHtml(query) + '」に一致するレコードが見つかりません</p>';
+      return;
+    }
+    const sorted = matches.slice().sort((a, b) => {
+      const ta = a.timestamp || '';
+      const tb = b.timestamp || '';
+      return tb.localeCompare(ta);
+    });
+    container.innerHTML = sorted.map(r => {
+      const postDelay = r.postDelayDate
+        ? (r.postDelayDateStatus === '決定' ? r.postDelayDate : '未定（' + r.postDelayDate + '）')
+        : '-';
+      return `
+        <div class="result-item">
+          <div class="result-customer">${escapeHtml(r.customerName)}</div>
+          <div class="result-meta">
+            <div><span class="label">配送日</span><span class="value">${escapeHtml(r.deliveryDate)}</span></div>
+            <div><span class="label">伝票No</span><span class="value">${escapeHtml(r.slipNumbers)}</span></div>
+            <div><span class="label">金額合計</span><span class="value">¥${formatNumber(r.totalAmount)}</span></div>
+            <div><span class="label">店舗</span><span class="value">${escapeHtml(r.storeName)}</span></div>
+            <div><span class="label">担当者</span><span class="value">${escapeHtml(r.salesPerson)}</span></div>
+            <div><span class="label">理由</span><span class="value">${escapeHtml(r.reason)}</span></div>
+            <div><span class="label">日延後</span><span class="value">${escapeHtml(postDelay)}</span></div>
+          </div>
+          <div class="result-actions">
+            <button type="button" class="btn btn-primary edit-btn" data-row="${r.rowIndex}">編集する</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = Number(btn.dataset.row);
+        const record = sorted.find(x => x.rowIndex === row);
+        if (record && typeof FormPage !== 'undefined') {
+          FormPage.loadForEdit(record);
+          App.switchPage('form');
+        }
+      });
+    });
+  }
+
+  document.getElementById('search-btn').addEventListener('click', search);
+  document.getElementById('search-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); search(); }
+  });
+
+  return {
+    onShow: function() {
+      // 表示のたびに最新を再取得（編集後の差分反映）
+      loaded = false;
+      load();
+    }
+  };
+})();
+</script>

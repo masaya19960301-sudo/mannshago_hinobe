@@ -1,6 +1,10 @@
 <div class="container">
   <div class="card">
-    <h2 class="section-title">日延案件 登録</h2>
+    <h2 class="section-title" id="form-title">日延案件 登録</h2>
+    <div id="edit-banner" style="display:none;background:#FED7AA;color:#9A3412;padding:8px 12px;border-radius:8px;margin-bottom:12px;font-size:13px;">
+      編集モード（既存レコードを更新します）
+      <button type="button" id="cancel-edit-btn" class="btn btn-danger" style="float:right;padding:4px 10px;font-size:12px;min-height:0;">キャンセル</button>
+    </div>
     <form id="record-form" novalidate>
       <div class="form-group">
         <label class="form-label" for="deliveryDate">配送日<span class="required-mark">*</span></label>
@@ -43,19 +47,73 @@
         <div class="field-error-msg" id="err-reason"></div>
       </div>
 
+      <div class="form-group">
+        <label class="form-label">日延後の配送日<span class="required-mark">*</span></label>
+        <div class="status-toggle">
+          <label class="status-option">
+            <input type="radio" name="postDelayDateStatus" value="決定" checked>
+            <span>決定している</span>
+          </label>
+          <label class="status-option">
+            <input type="radio" name="postDelayDateStatus" value="未定">
+            <span>未定</span>
+          </label>
+        </div>
+        <div id="post-delay-decided-wrap" style="margin-top:8px;">
+          <input type="date" id="postDelayDateDecided" class="form-input">
+        </div>
+        <div id="post-delay-pending-wrap" style="margin-top:8px;display:none;">
+          <input type="text" id="postDelayDatePending" class="form-input" placeholder="例：来週末、調整中、入荷待ち など" maxlength="100">
+          <div class="form-help">日本語で自由に入力できます</div>
+        </div>
+        <div class="field-error-msg" id="err-postDelayDate"></div>
+      </div>
+
       <button type="submit" id="submit-btn" class="btn btn-primary">登録する</button>
     </form>
   </div>
 </div>
 
+<style>
+  .status-toggle {
+    display: flex;
+    gap: 8px;
+  }
+  .status-option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px;
+    background: #fff;
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    user-select: none;
+  }
+  .status-option input[type="radio"] {
+    accent-color: var(--color-primary);
+    width: 18px;
+    height: 18px;
+  }
+  .status-option:has(input:checked) {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+    color: var(--color-primary-dark);
+  }
+</style>
+
 <script>
 const FormPage = (function() {
   const MAX_SLIPS = 10;
   let slipCount = 0;
-  let reasonsLoaded = false;
+  let editingRowIndex = null;
 
-  function createSlipRow() {
-    if (slipCount >= MAX_SLIPS) return;
+  function createSlipRow(initialSlipNo, initialAmount) {
+    if (slipCount >= MAX_SLIPS) return null;
     slipCount++;
     const container = document.getElementById('slips-container');
     const row = document.createElement('div');
@@ -66,6 +124,8 @@ const FormPage = (function() {
       <button type="button" class="remove-btn" aria-label="この行を削除">🗑</button>
     `;
     container.appendChild(row);
+    if (initialSlipNo !== undefined) row.querySelector('.slip-no').value = initialSlipNo;
+    if (initialAmount !== undefined) row.querySelector('.slip-amount').value = initialAmount;
     row.querySelector('.remove-btn').addEventListener('click', () => {
       if (slipCount > 1) {
         row.remove();
@@ -76,6 +136,7 @@ const FormPage = (function() {
     });
     updateRemoveButtons();
     updateAddButton();
+    return row;
   }
 
   function updateRemoveButtons() {
@@ -105,7 +166,6 @@ const FormPage = (function() {
           });
           if (current && res.reasons.indexOf(current) !== -1) sel.value = current;
         }
-        reasonsLoaded = true;
       })
       .withFailureHandler(err => {
         App.showToast('理由の取得に失敗: ' + err.message, 'error');
@@ -117,21 +177,32 @@ const FormPage = (function() {
     const input = document.getElementById(id);
     const err = document.getElementById('err-' + id);
     if (msg) {
-      input.classList.add('input-error');
+      if (input) input.classList.add('input-error');
       if (err) { err.textContent = msg; err.classList.add('show'); }
     } else {
-      input.classList.remove('input-error');
+      if (input) input.classList.remove('input-error');
       if (err) { err.textContent = ''; err.classList.remove('show'); }
     }
   }
 
   function clearErrors() {
-    ['deliveryDate', 'storeName', 'salesPerson', 'customerName', 'reason']
+    ['deliveryDate', 'storeName', 'salesPerson', 'customerName', 'reason', 'postDelayDate']
       .forEach(id => setFieldError(id, ''));
     document.querySelectorAll('.slip-row .form-input').forEach(i => i.classList.remove('input-error'));
   }
 
   function hasWhitespace(s) { return /[\s　]/.test(s); }
+
+  function getPostDelayStatus() {
+    const checked = document.querySelector('input[name="postDelayDateStatus"]:checked');
+    return checked ? checked.value : '決定';
+  }
+
+  function syncPostDelayInputs() {
+    const status = getPostDelayStatus();
+    document.getElementById('post-delay-decided-wrap').style.display = (status === '決定') ? '' : 'none';
+    document.getElementById('post-delay-pending-wrap').style.display = (status === '未定') ? '' : 'none';
+  }
 
   function validate() {
     clearErrors();
@@ -142,7 +213,6 @@ const FormPage = (function() {
     if (!deliveryDate) { setFieldError('deliveryDate', '配送日を選択してください'); ok = false; }
     data.deliveryDate = deliveryDate;
 
-    // slips
     const slips = [];
     const rows = document.querySelectorAll('#slips-container .slip-row');
     let firstSlipError = null;
@@ -187,6 +257,18 @@ const FormPage = (function() {
     if (!reason) { setFieldError('reason', '理由を選択してください'); ok = false; }
     data.reason = reason;
 
+    const status = getPostDelayStatus();
+    data.postDelayDateStatus = status;
+    if (status === '決定') {
+      const v = document.getElementById('postDelayDateDecided').value;
+      if (!v) { setFieldError('postDelayDate', '日延後の配送日を選択してください'); ok = false; }
+      data.postDelayDate = v;
+    } else {
+      const v = document.getElementById('postDelayDatePending').value.trim();
+      if (!v) { setFieldError('postDelayDate', '日延後の状況を入力してください'); ok = false; }
+      data.postDelayDate = v;
+    }
+
     return ok ? data : null;
   }
 
@@ -196,26 +278,34 @@ const FormPage = (function() {
     if (!data) return;
 
     const btn = document.getElementById('submit-btn');
+    const isEdit = editingRowIndex !== null;
     btn.disabled = true;
-    btn.textContent = '送信中...';
+    btn.textContent = isEdit ? '更新中...' : '送信中...';
 
-    google.script.run
-      .withSuccessHandler(res => {
-        btn.disabled = false;
-        btn.textContent = '登録する';
-        if (res && res.success) {
-          App.showToast('登録しました', 'success');
-          resetForm();
-        } else {
-          alert('登録に失敗しました: ' + ((res && res.error) || '不明なエラー'));
-        }
-      })
-      .withFailureHandler(err => {
-        btn.disabled = false;
-        btn.textContent = '登録する';
-        alert('通信エラー: ' + err.message);
-      })
-      .saveRecord(data);
+    const handler = res => {
+      btn.disabled = false;
+      btn.textContent = isEdit ? '更新する' : '登録する';
+      if (res && res.success) {
+        App.showToast(isEdit ? '更新しました' : '登録しました', 'success');
+        exitEditMode();
+        resetForm();
+      } else {
+        alert((isEdit ? '更新' : '登録') + 'に失敗しました: ' + ((res && res.error) || '不明なエラー'));
+      }
+    };
+    const failure = err => {
+      btn.disabled = false;
+      btn.textContent = isEdit ? '更新する' : '登録する';
+      alert('通信エラー: ' + err.message);
+    };
+
+    if (isEdit) {
+      google.script.run.withSuccessHandler(handler).withFailureHandler(failure)
+        .updateRecord(editingRowIndex, data);
+    } else {
+      google.script.run.withSuccessHandler(handler).withFailureHandler(failure)
+        .saveRecord(data);
+    }
   }
 
   function resetForm() {
@@ -223,19 +313,108 @@ const FormPage = (function() {
     document.getElementById('slips-container').innerHTML = '';
     slipCount = 0;
     createSlipRow();
+    syncPostDelayInputs();
     clearErrors();
+  }
+
+  function enterEditMode(record) {
+    editingRowIndex = record.rowIndex;
+    document.getElementById('edit-banner').style.display = '';
+    document.getElementById('form-title').textContent = '日延案件 編集';
+    document.getElementById('submit-btn').textContent = '更新する';
+
+    document.getElementById('deliveryDate').value = record.deliveryDate || '';
+    document.getElementById('storeName').value = record.storeName || '';
+    document.getElementById('salesPerson').value = record.salesPerson || '';
+    document.getElementById('customerName').value = record.customerName || '';
+
+    // 伝票行を組み立て
+    document.getElementById('slips-container').innerHTML = '';
+    slipCount = 0;
+    const nos = String(record.slipNumbers || '').split('/').filter(Boolean);
+    const amounts = String(record.amountBreakdown || '').split('/').filter(s => s !== '');
+    if (nos.length === 0) {
+      createSlipRow();
+    } else {
+      nos.forEach((no, i) => {
+        const amt = (amounts[i] !== undefined && amounts[i] !== '') ? amounts[i] : '';
+        createSlipRow(no, amt);
+      });
+    }
+
+    // 理由は loadReasons 完了後にセット
+    loadReasonsAndSelect(record.reason);
+
+    // 日延後の配送日
+    const status = (record.postDelayDateStatus === '決定') ? '決定' : '未定';
+    document.querySelector('input[name="postDelayDateStatus"][value="' + status + '"]').checked = true;
+    if (status === '決定') {
+      document.getElementById('postDelayDateDecided').value = record.postDelayDate || '';
+      document.getElementById('postDelayDatePending').value = '';
+    } else {
+      document.getElementById('postDelayDateDecided').value = '';
+      document.getElementById('postDelayDatePending').value = record.postDelayDate || '';
+    }
+    syncPostDelayInputs();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function loadReasonsAndSelect(value) {
+    google.script.run
+      .withSuccessHandler(res => {
+        const sel = document.getElementById('reason');
+        sel.innerHTML = '<option value="">選択してください</option>';
+        if (res && res.success) {
+          const reasons = res.reasons || [];
+          // 既存値がマスタになければ一時オプションを追加
+          if (value && reasons.indexOf(value) === -1) {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = value + '（マスタ未登録）';
+            sel.appendChild(opt);
+          }
+          reasons.forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r;
+            sel.appendChild(opt);
+          });
+          if (value) sel.value = value;
+        }
+      })
+      .getReasons();
+  }
+
+  function exitEditMode() {
+    editingRowIndex = null;
+    document.getElementById('edit-banner').style.display = 'none';
+    document.getElementById('form-title').textContent = '日延案件 登録';
+    document.getElementById('submit-btn').textContent = '登録する';
   }
 
   return {
     init: function() {
       createSlipRow();
-      document.getElementById('add-slip-btn').addEventListener('click', createSlipRow);
+      syncPostDelayInputs();
+      document.getElementById('add-slip-btn').addEventListener('click', () => createSlipRow());
       document.getElementById('record-form').addEventListener('submit', submit);
-      loadReasons();
+      document.querySelectorAll('input[name="postDelayDateStatus"]').forEach(r => {
+        r.addEventListener('change', syncPostDelayInputs);
+      });
+      document.getElementById('cancel-edit-btn').addEventListener('click', () => {
+        exitEditMode();
+        resetForm();
+        App.showToast('編集をキャンセルしました');
+      });
     },
     onShow: function() {
-      // 表示のたびに理由を再読込（設定で追加された分を反映）
-      loadReasons();
+      if (editingRowIndex === null) loadReasons();
+    },
+    loadForEdit: function(record) {
+      enterEditMode(record);
+    },
+    isEditing: function() {
+      return editingRowIndex !== null;
     }
   };
 })();

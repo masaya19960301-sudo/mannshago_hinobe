@@ -13,6 +13,7 @@
 
   <nav class="nav-tabs" role="tablist">
     <button class="nav-tab" data-page="form" role="tab">入力</button>
+    <button class="nav-tab" data-page="search" role="tab">検索</button>
     <button class="nav-tab" data-page="dashboard" role="tab">集計</button>
     <button class="nav-tab" data-page="settings" role="tab">設定</button>
   </nav>
@@ -20,6 +21,9 @@
   <main>
     <div id="page-form" class="page">
       <?!= include('form'); ?>
+    </div>
+    <div id="page-search" class="page">
+      <?!= include('search'); ?>
     </div>
     <div id="page-dashboard" class="page">
       <?!= include('dashboard'); ?>
@@ -56,6 +60,7 @@
         this.currentPage = page;
         // 各ページの初期化を呼ぶ
         if (page === 'form' && typeof FormPage !== 'undefined') FormPage.onShow();
+        if (page === 'search' && typeof SearchPage !== 'undefined') SearchPage.onShow();
         if (page === 'dashboard' && typeof DashboardPage !== 'undefined') DashboardPage.onShow();
         if (page === 'settings' && typeof SettingsPage !== 'undefined') SettingsPage.onShow();
       }

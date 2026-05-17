@@ -14,8 +14,14 @@ const RECORDS_HEADERS = [
   '店舗名',
   '販売担当者',
   'お客様名',
-  '理由'
+  '理由',
+  '日延後の配送日種別',
+  '日延後の配送日',
+  '販売金額内訳'
 ];
+
+const POST_DELAY_DECIDED = '決定';
+const POST_DELAY_PENDING = '未定';
 
 const DEFAULT_REASONS = [
   '在庫不足',
@@ -31,7 +37,7 @@ const DEFAULT_REASONS = [
 function doGet(e) {
   try {
     initializeSpreadsheet_();
-    const allowedPages = ['form', 'dashboard', 'settings'];
+    const allowedPages = ['form', 'search', 'dashboard', 'settings'];
     const requested = (e && e.parameter && e.parameter.page) ? String(e.parameter.page) : 'form';
     const page = allowedPages.indexOf(requested) !== -1 ? requested : 'form';
     const template = HtmlService.createTemplateFromFile('index');
@@ -100,6 +106,16 @@ function initializeSpreadsheet_() {
       .setFontWeight('bold')
       .setBackground('#F97316')
       .setFontColor('#FFFFFF');
+  } else {
+    // 既存スプレッドシートのスキーマ拡張（マイグレーション）
+    const lastCol = recordsSheet.getLastColumn();
+    if (lastCol < RECORDS_HEADERS.length) {
+      const missing = RECORDS_HEADERS.slice(lastCol);
+      recordsSheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing])
+        .setFontWeight('bold')
+        .setBackground('#F97316')
+        .setFontColor('#FFFFFF');
+    }
   }
 
   // reasons シート
@@ -128,39 +144,79 @@ function saveRecord(data) {
     if (!data || typeof data !== 'object') {
       return { success: false, error: '入力データが不正です' };
     }
-
-    // サーバー側バリデーション
     const validationError = validateRecord_(data);
     if (validationError) {
       return { success: false, error: validationError };
     }
 
+    initializeSpreadsheet_();
     const ss = getSpreadsheet_();
     const sheet = ss.getSheetByName(SHEET_RECORDS);
-    if (!sheet) {
-      initializeSpreadsheet_();
-    }
 
-    // 伝票Noを / 区切りで結合、金額を合計
-    const slipNumbers = data.slips.map(s => String(s.slipNo).trim()).join('/');
-    const totalAmount = data.slips.reduce((sum, s) => sum + Number(s.amount), 0);
-
-    const row = [
-      new Date(),
-      data.deliveryDate,
-      slipNumbers,
-      totalAmount,
-      Number(data.storeName),
-      String(data.salesPerson).trim(),
-      String(data.customerName).trim(),
-      String(data.reason).trim()
-    ];
-
-    ss.getSheetByName(SHEET_RECORDS).appendRow(row);
+    const row = buildRow_(data, new Date());
+    sheet.appendRow(row);
     return { success: true, message: '登録しました' };
   } catch (err) {
     return { success: false, error: '保存中にエラーが発生しました: ' + err.message };
   }
+}
+
+/**
+ * 既存レコードを更新
+ */
+function updateRecord(rowIndex, data) {
+  try {
+    const idx = Number(rowIndex);
+    if (!idx || idx < 2) {
+      return { success: false, error: '更新対象の行が不正です' };
+    }
+    if (!data || typeof data !== 'object') {
+      return { success: false, error: '入力データが不正です' };
+    }
+    const validationError = validateRecord_(data);
+    if (validationError) {
+      return { success: false, error: validationError };
+    }
+
+    initializeSpreadsheet_();
+    const ss = getSpreadsheet_();
+    const sheet = ss.getSheetByName(SHEET_RECORDS);
+    if (idx > sheet.getLastRow()) {
+      return { success: false, error: '指定行が存在しません' };
+    }
+
+    // 既存タイムスタンプ（列A）を保持
+    const existingTimestamp = sheet.getRange(idx, 1).getValue();
+    const ts = existingTimestamp instanceof Date ? existingTimestamp : new Date();
+    const row = buildRow_(data, ts);
+    sheet.getRange(idx, 1, 1, RECORDS_HEADERS.length).setValues([row]);
+    return { success: true, message: '更新しました' };
+  } catch (err) {
+    return { success: false, error: '更新中にエラーが発生しました: ' + err.message };
+  }
+}
+
+/**
+ * フォームデータから行配列を組み立てる
+ */
+function buildRow_(data, timestamp) {
+  const slipNumbers = data.slips.map(s => String(s.slipNo).trim()).join('/');
+  const amountBreakdown = data.slips.map(s => String(Number(s.amount))).join('/');
+  const totalAmount = data.slips.reduce((sum, s) => sum + Number(s.amount), 0);
+  const status = data.postDelayDateStatus === POST_DELAY_DECIDED ? POST_DELAY_DECIDED : POST_DELAY_PENDING;
+  return [
+    timestamp,
+    data.deliveryDate,
+    slipNumbers,
+    totalAmount,
+    Number(data.storeName),
+    String(data.salesPerson).trim(),
+    String(data.customerName).trim(),
+    String(data.reason).trim(),
+    status,
+    String(data.postDelayDate || '').trim(),
+    amountBreakdown
+  ];
 }
 
 /**
@@ -192,6 +248,19 @@ function validateRecord_(data) {
 
   if (!data.reason) return '理由が未入力です';
 
+  if (data.postDelayDateStatus !== POST_DELAY_DECIDED && data.postDelayDateStatus !== POST_DELAY_PENDING) {
+    return '日延後の配送日（決定／未定）を選択してください';
+  }
+  if (data.postDelayDateStatus === POST_DELAY_DECIDED) {
+    if (!data.postDelayDate || !/^\d{4}-\d{2}-\d{2}$/.test(data.postDelayDate)) {
+      return '日延後の配送日を選択してください';
+    }
+  } else {
+    if (!data.postDelayDate || String(data.postDelayDate).trim().length === 0) {
+      return '日延後の配送日（未定時の内容）を入力してください';
+    }
+  }
+
   return null;
 }
 
@@ -207,22 +276,38 @@ function containsWhitespace_(str) {
  */
 function getRecords() {
   try {
+    initializeSpreadsheet_();
     const ss = getSpreadsheet_();
     const sheet = ss.getSheetByName(SHEET_RECORDS);
     if (!sheet || sheet.getLastRow() < 2) {
       return { success: true, records: [] };
     }
-    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECORDS_HEADERS.length).getValues();
-    const records = values.map(row => ({
-      timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0]),
-      deliveryDate: row[1] instanceof Date ? Utilities.formatDate(row[1], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(row[1]),
-      slipNumbers: String(row[2]),
-      totalAmount: Number(row[3]) || 0,
-      storeName: String(row[4]),
-      salesPerson: String(row[5]),
-      customerName: String(row[6]),
-      reason: String(row[7])
-    }));
+    const numRows = sheet.getLastRow() - 1;
+    const values = sheet.getRange(2, 1, numRows, RECORDS_HEADERS.length).getValues();
+    const tz = Session.getScriptTimeZone();
+    const records = values.map((row, i) => {
+      const deliveryDate = row[1] instanceof Date
+        ? Utilities.formatDate(row[1], tz, 'yyyy-MM-dd')
+        : String(row[1] || '');
+      const postDelayRaw = row[9];
+      const postDelayDate = postDelayRaw instanceof Date
+        ? Utilities.formatDate(postDelayRaw, tz, 'yyyy-MM-dd')
+        : String(postDelayRaw == null ? '' : postDelayRaw);
+      return {
+        rowIndex: i + 2,
+        timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
+        deliveryDate: deliveryDate,
+        slipNumbers: String(row[2] || ''),
+        totalAmount: Number(row[3]) || 0,
+        storeName: String(row[4] == null ? '' : row[4]),
+        salesPerson: String(row[5] || ''),
+        customerName: String(row[6] || ''),
+        reason: String(row[7] || ''),
+        postDelayDateStatus: String(row[8] || ''),
+        postDelayDate: postDelayDate,
+        amountBreakdown: String(row[10] || '')
+      };
+    });
     return { success: true, records: records };
   } catch (err) {
     return { success: false, error: err.message, records: [] };

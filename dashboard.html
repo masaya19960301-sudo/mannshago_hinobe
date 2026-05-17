@@ -41,10 +41,11 @@
             <th>担当者</th>
             <th>お客様名</th>
             <th>理由</th>
+            <th>日延後の配送日</th>
           </tr>
         </thead>
         <tbody id="records-tbody">
-          <tr><td colspan="7" class="loading">読み込み中...</td></tr>
+          <tr><td colspan="8" class="loading">読み込み中...</td></tr>
         </tbody>
       </table>
     </div>
@@ -157,7 +158,7 @@ const DashboardPage = (function() {
   function renderTable(records) {
     const tbody = document.getElementById('records-tbody');
     if (records.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">記録がまだありません</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">記録がまだありません</td></tr>';
       return;
     }
     // 新しい順 = タイムスタンプ降順
@@ -166,33 +167,39 @@ const DashboardPage = (function() {
       const tb = b.timestamp || '';
       return tb.localeCompare(ta);
     });
-    tbody.innerHTML = sorted.map(r => `
-      <tr>
-        <td>${escapeHtml(r.deliveryDate)}</td>
-        <td>${escapeHtml(r.slipNumbers)}</td>
-        <td>¥${formatNumber(r.totalAmount)}</td>
-        <td>${escapeHtml(r.storeName)}</td>
-        <td>${escapeHtml(r.salesPerson)}</td>
-        <td>${escapeHtml(r.customerName)}</td>
-        <td>${escapeHtml(r.reason)}</td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = sorted.map(r => {
+      const postDelay = r.postDelayDate
+        ? (r.postDelayDateStatus === '決定' ? r.postDelayDate : '未定: ' + r.postDelayDate)
+        : '-';
+      return `
+        <tr>
+          <td>${escapeHtml(r.deliveryDate)}</td>
+          <td>${escapeHtml(r.slipNumbers)}</td>
+          <td>¥${formatNumber(r.totalAmount)}</td>
+          <td>${escapeHtml(r.storeName)}</td>
+          <td>${escapeHtml(r.salesPerson)}</td>
+          <td>${escapeHtml(r.customerName)}</td>
+          <td>${escapeHtml(r.reason)}</td>
+          <td>${escapeHtml(postDelay)}</td>
+        </tr>
+      `;
+    }).join('');
   }
 
   function load() {
     const tbody = document.getElementById('records-tbody');
-    tbody.innerHTML = '<tr><td colspan="7" class="loading">読み込み中...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="loading">読み込み中...</td></tr>';
     google.script.run
       .withSuccessHandler(res => {
         if (res && res.success) {
           render(res.records || []);
           loadedOnce = true;
         } else {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">読み込みに失敗しました: ' + escapeHtml((res && res.error) || '') + '</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" class="empty-state">読み込みに失敗しました: ' + escapeHtml((res && res.error) || '') + '</td></tr>';
         }
       })
       .withFailureHandler(err => {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">通信エラー: ' + escapeHtml(err.message) + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">通信エラー: ' + escapeHtml(err.message) + '</td></tr>';
       })
       .getRecords();
   }
