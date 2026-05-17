@@ -5,6 +5,10 @@
       編集モード（既存レコードを更新します）
       <button type="button" id="cancel-edit-btn" class="btn btn-danger" style="float:right;padding:4px 10px;font-size:12px;min-height:0;">キャンセル</button>
     </div>
+    <div id="copy-banner" style="display:none;background:#DBEAFE;color:#1E40AF;padding:8px 12px;border-radius:8px;margin-bottom:12px;font-size:13px;">
+      複製モード（同じ伝票Noでも登録できます）
+      <button type="button" id="cancel-copy-btn" class="btn btn-danger" style="float:right;padding:4px 10px;font-size:12px;min-height:0;">キャンセル</button>
+    </div>
     <form id="record-form" novalidate>
       <div class="form-group">
         <label class="form-label" for="deliveryDate">配送日<span class="required-mark">*</span></label>
@@ -141,6 +145,7 @@ const FormPage = (function() {
   const MAX_SLIPS = 10;
   let slipCount = 0;
   let editingRowIndex = null;
+  let copyMode = false;
   let currentDuplicateRecord = null;
   let suppressBlurCheck = false;
   const checkedSlipCache = {}; // slipNo -> 'clean' | 'dup' for current session
@@ -175,9 +180,9 @@ const FormPage = (function() {
 
   function handleSlipBlur(e) {
     if (suppressBlurCheck) return;
+    if (copyMode) return; // 複製モードでは重複を許可するためチェックを行わない
     const v = e.target.value.trim();
     if (!/^\d{6}$/.test(v)) return;
-    // 一度確認済みの値は再度問い合わせない（送信時には改めてサーバーで判定される）
     if (checkedSlipCache[v]) return;
     const exclude = editingRowIndex;
     google.script.run
@@ -356,6 +361,7 @@ const FormPage = (function() {
       google.script.run.withSuccessHandler(handler).withFailureHandler(failure)
         .updateRecord(editingRowIndex, data);
     } else {
+      data.allowDuplicate = copyMode;
       google.script.run.withSuccessHandler(handler).withFailureHandler(failure)
         .saveRecord(data);
     }
@@ -441,13 +447,19 @@ const FormPage = (function() {
 
   function copyFromRecord(record) {
     exitEditMode();
+    copyMode = true;
+    document.getElementById('copy-banner').style.display = '';
     populateFormFields(record);
-    // コピー元の伝票Noはキャッシュから除外（変更後に再チェックされるように）
     String(record.slipNumbers || '').split('/').forEach(s => {
       const t = String(s || '').trim();
       if (t) delete checkedSlipCache[t];
     });
-    App.showToast('過去レコードをコピーしました。伝票No等を変更して登録してください', 'success');
+    App.showToast('過去レコードをコピーしました。同じ伝票Noでも登録できます', 'success');
+  }
+
+  function exitCopyMode() {
+    copyMode = false;
+    document.getElementById('copy-banner').style.display = 'none';
   }
 
   function resetForm() {
@@ -457,6 +469,7 @@ const FormPage = (function() {
     createSlipRow();
     syncPostDelayInputs();
     clearErrors();
+    exitCopyMode();
     Object.keys(checkedSlipCache).forEach(k => { delete checkedSlipCache[k]; });
   }
 
@@ -514,6 +527,11 @@ const FormPage = (function() {
         exitEditMode();
         resetForm();
         App.showToast('編集をキャンセルしました');
+      });
+      document.getElementById('cancel-copy-btn').addEventListener('click', () => {
+        exitCopyMode();
+        resetForm();
+        App.showToast('複製モードを解除しました');
       });
 
       // 重複モーダルのボタン

@@ -37,6 +37,7 @@ const DEFAULT_REASONS = [
 function doGet(e) {
   try {
     initializeSpreadsheet_();
+    maybePurgeOldRecords_();
     const allowedPages = ['form', 'search', 'dashboard', 'settings'];
     const requested = (e && e.parameter && e.parameter.page) ? String(e.parameter.page) : 'form';
     const page = allowedPages.indexOf(requested) !== -1 ? requested : 'form';
@@ -153,9 +154,12 @@ function saveRecord(data) {
     const ss = getSpreadsheet_();
     const sheet = ss.getSheetByName(SHEET_RECORDS);
 
-    const dup = findDuplicateSlip_(data.slips, null);
-    if (dup) {
-      return { success: false, duplicate: dup };
+    // コピー複製モード時は重複チェックをスキップして同一伝票Noも許可
+    if (!data.allowDuplicate) {
+      const dup = findDuplicateSlip_(data.slips, null);
+      if (dup) {
+        return { success: false, duplicate: dup };
+      }
     }
 
     const row = buildRow_(data, new Date());
@@ -458,6 +462,75 @@ function deleteReason(index) {
   } catch (err) {
     return { success: false, error: err.message };
   }
+}
+
+/**
+ * 配送日を基準に丸3年経過したレコードを削除する。
+ * @return {number} 削除件数
+ */
+function purgeOldRecords() {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(SHEET_RECORDS);
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+
+  const now = new Date();
+  // threshold = 今日からちょうど3年前の同日 0:00。これ以前（同日含む）を削除対象とする。
+  const threshold = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
+
+  const lastRow = sheet.getLastRow();
+  const numRows = lastRow - 1;
+  const dateValues = sheet.getRange(2, 2, numRows, 1).getValues();
+  const rowsToDelete = [];
+  for (let i = 0; i < dateValues.length; i++) {
+    const v = dateValues[i][0];
+    let d = null;
+    if (v instanceof Date) {
+      d = v;
+    } else if (typeof v === 'string') {
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    }
+    if (!d || isNaN(d.getTime())) continue; // 解析できないものは保護
+    if (d.getTime() <= threshold.getTime()) {
+      rowsToDelete.push(i + 2);
+    }
+  }
+  // インデックスのずれを避けるため後ろから削除
+  for (let j = rowsToDelete.length - 1; j >= 0; j--) {
+    sheet.deleteRow(rowsToDelete[j]);
+  }
+  return rowsToDelete.length;
+}
+
+/**
+ * 1日1回だけ purgeOldRecords を実行する（doGet から呼ばれる）。
+ */
+function maybePurgeOldRecords_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    if (props.getProperty('LAST_PURGE_DATE') === today) return;
+    purgeOldRecords();
+    props.setProperty('LAST_PURGE_DATE', today);
+  } catch (err) {
+    // パージ失敗で本体UIを止めないよう握りつぶす
+  }
+}
+
+/**
+ * 毎日自動パージするためのインストール型トリガを登録する。
+ * Apps Script エディタで一度だけ手動実行してください。
+ */
+function installDailyPurgeTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'purgeOldRecords') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('purgeOldRecords')
+    .timeBased()
+    .everyDays(1)
+    .atHour(3)
+    .create();
 }
 
 /**
