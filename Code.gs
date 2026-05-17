@@ -207,6 +207,23 @@ function updateRecord(rowIndex, data) {
 }
 
 /**
+ * 単一伝票Noの重複チェック（フォーム入力中の即時チェック用）
+ */
+function checkDuplicateSlip(slipNo, excludeRowIndex) {
+  try {
+    const s = String(slipNo == null ? '' : slipNo).trim();
+    if (!/^\d{6}$/.test(s)) {
+      return { success: true, duplicate: null };
+    }
+    const exclude = excludeRowIndex ? Number(excludeRowIndex) : null;
+    const dup = findDuplicateSlip_([{ slipNo: s, amount: 0 }], exclude);
+    return { success: true, duplicate: dup };
+  } catch (err) {
+    return { success: false, error: err.message, duplicate: null };
+  }
+}
+
+/**
  * 伝票Noの重複を検出する。
  * @param {Array<{slipNo:string,amount:number}>} slips - 入力された伝票
  * @param {number|null} excludeRowIndex - 自身のレコード（編集時）を除外する行番号
@@ -244,7 +261,8 @@ function findDuplicateSlip_(slips, excludeRowIndex) {
             customerName: String(values[i][6] || ''),
             reason: String(values[i][7] || ''),
             postDelayDateStatus: String(values[i][8] || ''),
-            postDelayDate: values[i][9] instanceof Date ? Utilities.formatDate(values[i][9], tz, 'yyyy-MM-dd') : String(values[i][9] == null ? '' : values[i][9])
+            postDelayDate: values[i][9] instanceof Date ? Utilities.formatDate(values[i][9], tz, 'yyyy-MM-dd') : String(values[i][9] == null ? '' : values[i][9]),
+            amountBreakdown: String(values[i][10] || '')
           }
         };
       }

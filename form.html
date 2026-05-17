@@ -97,6 +97,7 @@
     </div>
     <div class="modal-actions">
       <button type="button" id="dup-edit-btn" class="btn btn-primary">元データを編集する</button>
+      <button type="button" id="dup-copy-btn" class="btn btn-secondary">コピーして複製する</button>
       <button type="button" id="dup-clear-btn" class="btn btn-danger">入力をクリアする</button>
       <button type="button" id="dup-close-btn" class="modal-close-link">閉じる（入力内容は保持）</button>
     </div>
@@ -140,6 +141,9 @@ const FormPage = (function() {
   const MAX_SLIPS = 10;
   let slipCount = 0;
   let editingRowIndex = null;
+  let currentDuplicateRecord = null;
+  let suppressBlurCheck = false;
+  const checkedSlipCache = {}; // slipNo -> 'clean' | 'dup' for current session
 
   function createSlipRow(initialSlipNo, initialAmount) {
     if (slipCount >= MAX_SLIPS) return null;
@@ -163,9 +167,27 @@ const FormPage = (function() {
         updateAddButton();
       }
     });
+    row.querySelector('.slip-no').addEventListener('blur', handleSlipBlur);
     updateRemoveButtons();
     updateAddButton();
     return row;
+  }
+
+  function handleSlipBlur(e) {
+    if (suppressBlurCheck) return;
+    const v = e.target.value.trim();
+    if (!/^\d{6}$/.test(v)) return;
+    // 一度確認済みの値は再度問い合わせない（送信時には改めてサーバーで判定される）
+    if (checkedSlipCache[v]) return;
+    const exclude = editingRowIndex;
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || !res.success) return;
+        checkedSlipCache[v] = res.duplicate ? 'dup' : 'clean';
+        if (res.duplicate) showDuplicateModal(res.duplicate);
+      })
+      .withFailureHandler(() => {})
+      .checkDuplicateSlip(v, exclude);
   }
 
   function updateRemoveButtons() {
@@ -351,6 +373,7 @@ const FormPage = (function() {
 
   function showDuplicateModal(dup) {
     const r = dup.record || {};
+    currentDuplicateRecord = r;
     const postDelay = r.postDelayDate
       ? (r.postDelayDateStatus === '決定' ? r.postDelayDate : '未定: ' + r.postDelayDate)
       : '-';
@@ -374,6 +397,59 @@ const FormPage = (function() {
     document.getElementById('dup-modal').style.display = 'none';
   }
 
+  /**
+   * record の内容をフォーム入力欄に流し込む（編集／コピー共通）。
+   */
+  function populateFormFields(record) {
+    suppressBlurCheck = true;
+    try {
+      document.getElementById('deliveryDate').value = record.deliveryDate || '';
+      document.getElementById('storeName').value = record.storeName || '';
+      document.getElementById('salesPerson').value = record.salesPerson || '';
+      document.getElementById('customerName').value = record.customerName || '';
+
+      document.getElementById('slips-container').innerHTML = '';
+      slipCount = 0;
+      const nos = String(record.slipNumbers || '').split('/').filter(Boolean);
+      const amounts = String(record.amountBreakdown || '').split('/').filter(s => s !== '');
+      if (nos.length === 0) {
+        createSlipRow();
+      } else {
+        nos.forEach((no, i) => {
+          const amt = (amounts[i] !== undefined && amounts[i] !== '') ? amounts[i] : '';
+          createSlipRow(no, amt);
+        });
+      }
+
+      loadReasonsAndSelect(record.reason);
+
+      const status = (record.postDelayDateStatus === '決定') ? '決定' : '未定';
+      document.querySelector('input[name="postDelayDateStatus"][value="' + status + '"]').checked = true;
+      if (status === '決定') {
+        document.getElementById('postDelayDateDecided').value = record.postDelayDate || '';
+        document.getElementById('postDelayDatePending').value = '';
+      } else {
+        document.getElementById('postDelayDateDecided').value = '';
+        document.getElementById('postDelayDatePending').value = record.postDelayDate || '';
+      }
+      syncPostDelayInputs();
+    } finally {
+      setTimeout(() => { suppressBlurCheck = false; }, 50);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function copyFromRecord(record) {
+    exitEditMode();
+    populateFormFields(record);
+    // コピー元の伝票Noはキャッシュから除外（変更後に再チェックされるように）
+    String(record.slipNumbers || '').split('/').forEach(s => {
+      const t = String(s || '').trim();
+      if (t) delete checkedSlipCache[t];
+    });
+    App.showToast('過去レコードをコピーしました。伝票No等を変更して登録してください', 'success');
+  }
+
   function resetForm() {
     document.getElementById('record-form').reset();
     document.getElementById('slips-container').innerHTML = '';
@@ -381,6 +457,7 @@ const FormPage = (function() {
     createSlipRow();
     syncPostDelayInputs();
     clearErrors();
+    Object.keys(checkedSlipCache).forEach(k => { delete checkedSlipCache[k]; });
   }
 
   function enterEditMode(record) {
@@ -388,41 +465,7 @@ const FormPage = (function() {
     document.getElementById('edit-banner').style.display = '';
     document.getElementById('form-title').textContent = '日延案件 編集';
     document.getElementById('submit-btn').textContent = '更新する';
-
-    document.getElementById('deliveryDate').value = record.deliveryDate || '';
-    document.getElementById('storeName').value = record.storeName || '';
-    document.getElementById('salesPerson').value = record.salesPerson || '';
-    document.getElementById('customerName').value = record.customerName || '';
-
-    // 伝票行を組み立て
-    document.getElementById('slips-container').innerHTML = '';
-    slipCount = 0;
-    const nos = String(record.slipNumbers || '').split('/').filter(Boolean);
-    const amounts = String(record.amountBreakdown || '').split('/').filter(s => s !== '');
-    if (nos.length === 0) {
-      createSlipRow();
-    } else {
-      nos.forEach((no, i) => {
-        const amt = (amounts[i] !== undefined && amounts[i] !== '') ? amounts[i] : '';
-        createSlipRow(no, amt);
-      });
-    }
-
-    // 理由は loadReasons 完了後にセット
-    loadReasonsAndSelect(record.reason);
-
-    // 日延後の配送日
-    const status = (record.postDelayDateStatus === '決定') ? '決定' : '未定';
-    document.querySelector('input[name="postDelayDateStatus"][value="' + status + '"]').checked = true;
-    if (status === '決定') {
-      document.getElementById('postDelayDateDecided').value = record.postDelayDate || '';
-      document.getElementById('postDelayDatePending').value = '';
-    } else {
-      document.getElementById('postDelayDateDecided').value = '';
-      document.getElementById('postDelayDatePending').value = record.postDelayDate || '';
-    }
-    syncPostDelayInputs();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    populateFormFields(record);
   }
 
   function loadReasonsAndSelect(value) {
@@ -483,6 +526,11 @@ const FormPage = (function() {
           SearchPage.setPendingQuery(slipNo);
         }
         App.switchPage('search');
+      });
+      document.getElementById('dup-copy-btn').addEventListener('click', () => {
+        const record = currentDuplicateRecord;
+        hideDuplicateModal();
+        if (record) copyFromRecord(record);
       });
       document.getElementById('dup-clear-btn').addEventListener('click', () => {
         hideDuplicateModal();
