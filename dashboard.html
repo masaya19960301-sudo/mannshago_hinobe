@@ -29,6 +29,49 @@
   </div>
 
   <div class="card">
+    <h2 class="section-title">店別集計</h2>
+    <div class="chart-container">
+      <canvas id="chart-store"></canvas>
+    </div>
+    <div class="table-wrap" style="margin-top:12px;">
+      <table class="records-table" style="min-width:0;">
+        <thead>
+          <tr>
+            <th>店舗</th>
+            <th>件数</th>
+            <th>金額合計</th>
+            <th>件数比率</th>
+          </tr>
+        </thead>
+        <tbody id="store-tbody">
+          <tr><td colspan="4" class="loading">読み込み中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">担当者ランキング</h2>
+    <div class="chart-container" id="sales-chart-wrap">
+      <canvas id="chart-sales"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">担当者の理由内訳</h2>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label" for="sales-select">担当者を選択</label>
+      <select id="sales-select" class="form-select">
+        <option value="">担当者を選んでください</option>
+      </select>
+    </div>
+    <div class="chart-container">
+      <canvas id="chart-sales-breakdown"></canvas>
+    </div>
+    <div id="sales-breakdown-empty" class="empty-state" style="display:none;">対象データがありません</div>
+  </div>
+
+  <div class="card">
     <h2 class="section-title">記録一覧</h2>
     <div class="table-wrap">
       <table class="records-table">
@@ -56,7 +99,12 @@
 const DashboardPage = (function() {
   let monthlyChart = null;
   let reasonChart = null;
+  let storeChart = null;
+  let salesChart = null;
+  let salesBreakdownChart = null;
+  let cachedRecords = [];
   let loadedOnce = false;
+  const PALETTE = ['#F97316', '#FB923C', '#FDBA74', '#EA580C', '#C2410C', '#9A3412', '#FCD34D', '#FBBF24', '#F59E0B', '#D97706'];
 
   function formatNumber(n) {
     return Number(n || 0).toLocaleString('ja-JP');
@@ -88,6 +136,9 @@ const DashboardPage = (function() {
 
     renderMonthlyChart(records);
     renderReasonChart(records);
+    renderStoreSection(records);
+    renderSalesRanking(records);
+    populateSalesSelect(records);
     renderTable(records);
   }
 
@@ -155,6 +206,175 @@ const DashboardPage = (function() {
     });
   }
 
+  function renderStoreSection(records) {
+    const map = {};
+    records.forEach(r => {
+      const k = String(r.storeName || '').trim() || '(未設定)';
+      if (!map[k]) map[k] = { count: 0, amount: 0 };
+      map[k].count++;
+      map[k].amount += Number(r.totalAmount || 0);
+    });
+    const entries = Object.keys(map).map(k => ({ store: k, count: map[k].count, amount: map[k].amount }))
+      .sort((a, b) => b.count - a.count);
+    const labels = entries.map(e => e.store);
+    const counts = entries.map(e => e.count);
+    const amounts = entries.map(e => e.amount);
+
+    if (storeChart) storeChart.destroy();
+    storeChart = new Chart(document.getElementById('chart-store').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: '件数', data: counts, backgroundColor: '#F97316', yAxisID: 'y', borderRadius: 4 },
+          { label: '金額合計', data: amounts, backgroundColor: '#FDBA74', yAxisID: 'y1', borderRadius: 4 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 14, font: { size: 12 } } } },
+        scales: {
+          y: { beginAtZero: true, position: 'left', title: { display: true, text: '件数' }, ticks: { precision: 0 } },
+          y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '金額' } }
+        }
+      }
+    });
+
+    const totalCount = counts.reduce((a, b) => a + b, 0);
+    const tbody = document.getElementById('store-tbody');
+    if (entries.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">データなし</td></tr>';
+    } else {
+      tbody.innerHTML = entries.map(e => {
+        const pct = totalCount > 0 ? (e.count / totalCount * 100).toFixed(1) : '0.0';
+        return `
+          <tr>
+            <td>${escapeHtml(e.store)}</td>
+            <td>${formatNumber(e.count)}</td>
+            <td>¥${formatNumber(e.amount)}</td>
+            <td>${pct}%</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+
+  function renderSalesRanking(records) {
+    const map = {};
+    records.forEach(r => {
+      const k = String(r.salesPerson || '').trim() || '(未設定)';
+      if (!map[k]) map[k] = { count: 0, amount: 0 };
+      map[k].count++;
+      map[k].amount += Number(r.totalAmount || 0);
+    });
+    const entries = Object.keys(map).map(k => ({ name: k, count: map[k].count, amount: map[k].amount }))
+      .sort((a, b) => b.count - a.count);
+    const labels = entries.map(e => e.name);
+    const counts = entries.map(e => e.count);
+
+    // 担当者数に応じてグラフの高さを調整（読みやすさのため）
+    const wrap = document.getElementById('sales-chart-wrap');
+    wrap.style.height = Math.max(260, entries.length * 32 + 60) + 'px';
+
+    if (salesChart) salesChart.destroy();
+    salesChart = new Chart(document.getElementById('chart-sales').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: '件数',
+          data: counts,
+          backgroundColor: labels.map((_, i) => PALETTE[i % PALETTE.length]),
+          borderRadius: 4
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              afterLabel: function(ctx) {
+                const e = entries[ctx.dataIndex];
+                return '金額合計: ¥' + formatNumber(e.amount);
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+      }
+    });
+  }
+
+  function populateSalesSelect(records) {
+    const sel = document.getElementById('sales-select');
+    const prev = sel.value;
+    const names = Array.from(new Set(records
+      .map(r => String(r.salesPerson || '').trim())
+      .filter(n => n.length > 0)))
+      .sort((a, b) => a.localeCompare(b, 'ja'));
+    sel.innerHTML = '<option value="">担当者を選んでください</option>' +
+      names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    if (prev && names.indexOf(prev) !== -1) {
+      sel.value = prev;
+      renderSalesBreakdown(prev);
+    } else {
+      renderSalesBreakdown('');
+    }
+  }
+
+  function renderSalesBreakdown(name) {
+    const empty = document.getElementById('sales-breakdown-empty');
+    const canvas = document.getElementById('chart-sales-breakdown');
+    if (salesBreakdownChart) { salesBreakdownChart.destroy(); salesBreakdownChart = null; }
+    if (!name) {
+      empty.style.display = 'block';
+      empty.textContent = '上のセレクトから担当者を選んでください';
+      canvas.style.display = 'none';
+      return;
+    }
+    const filtered = cachedRecords.filter(r => String(r.salesPerson || '').trim() === name);
+    if (filtered.length === 0) {
+      empty.style.display = 'block';
+      empty.textContent = '対象データがありません';
+      canvas.style.display = 'none';
+      return;
+    }
+    const counts = {};
+    filtered.forEach(r => {
+      const k = String(r.reason || '').trim() || '(未設定)';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const labels = Object.keys(counts);
+    const data = labels.map(l => counts[l]);
+
+    empty.style.display = 'none';
+    canvas.style.display = '';
+    salesBreakdownChart = new Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels,
+        datasets: [{
+          data: data,
+          backgroundColor: labels.map((_, i) => PALETTE[i % PALETTE.length])
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 14, font: { size: 12 } } },
+          title: { display: true, text: name + 'さんの理由内訳（全' + filtered.length + '件）', font: { size: 13 } }
+        }
+      }
+    });
+  }
+
   function renderTable(records) {
     const tbody = document.getElementById('records-tbody');
     if (records.length === 0) {
@@ -192,7 +412,8 @@ const DashboardPage = (function() {
     google.script.run
       .withSuccessHandler(res => {
         if (res && res.success) {
-          render(res.records || []);
+          cachedRecords = res.records || [];
+          render(cachedRecords);
           loadedOnce = true;
         } else {
           tbody.innerHTML = '<tr><td colspan="8" class="empty-state">読み込みに失敗しました: ' + escapeHtml((res && res.error) || '') + '</td></tr>';
@@ -203,6 +424,10 @@ const DashboardPage = (function() {
       })
       .getRecords();
   }
+
+  document.getElementById('sales-select').addEventListener('change', (e) => {
+    renderSalesBreakdown(e.target.value);
+  });
 
   return {
     onShow: function() {
