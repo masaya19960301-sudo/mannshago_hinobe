@@ -64,16 +64,35 @@ function getSpreadsheet_() {
 }
 
 /**
+ * シートを取得。無ければ作成して返す。
+ * getSheetByName と insertSheet の不整合（既存だがgetでnull等）にも耐える。
+ */
+function getOrCreateSheet_(ss, name) {
+  // まず全シートをリストアップして名前一致を確実に探す
+  const sheets = ss.getSheets();
+  for (let i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName() === name) return sheets[i];
+  }
+  try {
+    return ss.insertSheet(name);
+  } catch (err) {
+    // 競合などで作成失敗した場合、もう一度リストから探す
+    const retry = ss.getSheets();
+    for (let i = 0; i < retry.length; i++) {
+      if (retry[i].getName() === name) return retry[i];
+    }
+    throw err;
+  }
+}
+
+/**
  * 初回実行時にシートとヘッダーを自動生成
  */
 function initializeSpreadsheet_() {
   const ss = getSpreadsheet_();
 
   // records シート
-  let recordsSheet = ss.getSheetByName(SHEET_RECORDS);
-  if (!recordsSheet) {
-    recordsSheet = ss.insertSheet(SHEET_RECORDS);
-  }
+  const recordsSheet = getOrCreateSheet_(ss, SHEET_RECORDS);
   if (recordsSheet.getLastRow() === 0) {
     recordsSheet.getRange(1, 1, 1, RECORDS_HEADERS.length).setValues([RECORDS_HEADERS]);
     recordsSheet.setFrozenRows(1);
@@ -84,14 +103,8 @@ function initializeSpreadsheet_() {
   }
 
   // reasons シート
-  let reasonsSheet = ss.getSheetByName(SHEET_REASONS);
-  if (!reasonsSheet) {
-    reasonsSheet = ss.insertSheet(SHEET_REASONS);
-    reasonsSheet.getRange(1, 1).setValue('理由').setFontWeight('bold').setBackground('#F97316').setFontColor('#FFFFFF');
-    const values = DEFAULT_REASONS.map(r => [r]);
-    reasonsSheet.getRange(2, 1, values.length, 1).setValues(values);
-    reasonsSheet.setFrozenRows(1);
-  } else if (reasonsSheet.getLastRow() === 0) {
+  const reasonsSheet = getOrCreateSheet_(ss, SHEET_REASONS);
+  if (reasonsSheet.getLastRow() === 0) {
     reasonsSheet.getRange(1, 1).setValue('理由').setFontWeight('bold').setBackground('#F97316').setFontColor('#FFFFFF');
     const values = DEFAULT_REASONS.map(r => [r]);
     reasonsSheet.getRange(2, 1, values.length, 1).setValues(values);
@@ -99,9 +112,8 @@ function initializeSpreadsheet_() {
   }
 
   // settings シート
-  let settingsSheet = ss.getSheetByName(SHEET_SETTINGS);
-  if (!settingsSheet) {
-    settingsSheet = ss.insertSheet(SHEET_SETTINGS);
+  const settingsSheet = getOrCreateSheet_(ss, SHEET_SETTINGS);
+  if (settingsSheet.getLastRow() === 0) {
     settingsSheet.getRange(1, 1, 1, 2).setValues([['キー', '値']])
       .setFontWeight('bold').setBackground('#F97316').setFontColor('#FFFFFF');
     settingsSheet.setFrozenRows(1);
