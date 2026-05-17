@@ -1,0 +1,113 @@
+<div class="container">
+  <div class="card">
+    <h2 class="section-title">理由マスタの管理</h2>
+    <p style="margin-top:0;font-size:13px;color:var(--color-text-muted);">
+      入力フォームで選択できる「理由」を管理します。
+    </p>
+    <div class="add-reason-row">
+      <input type="text" id="new-reason-input" class="form-input" placeholder="新しい理由を入力" maxlength="50">
+      <button type="button" id="add-reason-btn" class="btn btn-primary" style="width:auto;">追加</button>
+    </div>
+    <ul id="reason-list" class="reason-list">
+      <li class="loading">読み込み中...</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const SettingsPage = (function() {
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function render(reasons) {
+    const ul = document.getElementById('reason-list');
+    if (!reasons || reasons.length === 0) {
+      ul.innerHTML = '<li class="empty-state">理由が登録されていません</li>';
+      return;
+    }
+    ul.innerHTML = reasons.map((r, i) => `
+      <li class="reason-item">
+        <span class="reason-text">${escapeHtml(r)}</span>
+        <button type="button" class="btn btn-danger delete-reason-btn" data-index="${i}">削除</button>
+      </li>
+    `).join('');
+    ul.querySelectorAll('.delete-reason-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteReason(Number(btn.dataset.index), reasons[Number(btn.dataset.index)]));
+    });
+  }
+
+  function load() {
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.success) {
+          render(res.reasons || []);
+        } else {
+          document.getElementById('reason-list').innerHTML =
+            '<li class="empty-state">読み込みに失敗しました</li>';
+        }
+      })
+      .withFailureHandler(err => {
+        document.getElementById('reason-list').innerHTML =
+          '<li class="empty-state">通信エラー: ' + escapeHtml(err.message) + '</li>';
+      })
+      .getReasons();
+  }
+
+  function addReason() {
+    const input = document.getElementById('new-reason-input');
+    const val = input.value.trim();
+    if (!val) {
+      App.showToast('空の選択肢は登録できません', 'error');
+      return;
+    }
+    const btn = document.getElementById('add-reason-btn');
+    btn.disabled = true;
+    google.script.run
+      .withSuccessHandler(res => {
+        btn.disabled = false;
+        if (res && res.success) {
+          input.value = '';
+          App.showToast('追加しました', 'success');
+          render(res.reasons || []);
+        } else {
+          App.showToast((res && res.error) || '追加に失敗しました', 'error');
+        }
+      })
+      .withFailureHandler(err => {
+        btn.disabled = false;
+        App.showToast('通信エラー: ' + err.message, 'error');
+      })
+      .addReason(val);
+  }
+
+  function deleteReason(index, label) {
+    if (!confirm('「' + label + '」を削除します。よろしいですか？')) return;
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.success) {
+          App.showToast('削除しました', 'success');
+          render(res.reasons || []);
+        } else {
+          App.showToast((res && res.error) || '削除に失敗しました', 'error');
+        }
+      })
+      .withFailureHandler(err => {
+        App.showToast('通信エラー: ' + err.message, 'error');
+      })
+      .deleteReason(index);
+  }
+
+  document.getElementById('add-reason-btn').addEventListener('click', addReason);
+  document.getElementById('new-reason-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addReason(); }
+  });
+
+  return {
+    onShow: function() { load(); }
+  };
+})();
+</script>

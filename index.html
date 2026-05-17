@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <base target="_top">
+  <title>配送センター日延集計</title>
+  <?!= include('style'); ?>
+</head>
+<body>
+  <header class="app-header">
+    <h1>配送センター日延集計</h1>
+  </header>
+
+  <nav class="nav-tabs" role="tablist">
+    <button class="nav-tab" data-page="form" role="tab">入力</button>
+    <button class="nav-tab" data-page="dashboard" role="tab">集計</button>
+    <button class="nav-tab" data-page="settings" role="tab">設定</button>
+  </nav>
+
+  <main>
+    <div id="page-form" class="page">
+      <?!= include('form'); ?>
+    </div>
+    <div id="page-dashboard" class="page">
+      <?!= include('dashboard'); ?>
+    </div>
+    <div id="page-settings" class="page">
+      <?!= include('settings'); ?>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    // 共通ユーティリティ
+    const App = {
+      currentPage: null,
+      showToast: function(msg, type) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.className = 'toast show ' + (type || '');
+        clearTimeout(t._timer);
+        t._timer = setTimeout(() => {
+          t.className = 'toast';
+        }, 3000);
+      },
+      switchPage: function(page) {
+        if (this.currentPage === page) return;
+        document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+        const pageEl = document.getElementById('page-' + page);
+        const tabEl = document.querySelector('.nav-tab[data-page="' + page + '"]');
+        if (pageEl) pageEl.classList.add('active');
+        if (tabEl) tabEl.classList.add('active');
+        this.currentPage = page;
+        // 各ページの初期化を呼ぶ
+        if (page === 'form' && typeof FormPage !== 'undefined') FormPage.onShow();
+        if (page === 'dashboard' && typeof DashboardPage !== 'undefined') DashboardPage.onShow();
+        if (page === 'settings' && typeof SettingsPage !== 'undefined') SettingsPage.onShow();
+      }
+    };
+
+    document.querySelectorAll('.nav-tab').forEach(btn => {
+      btn.addEventListener('click', () => App.switchPage(btn.dataset.page));
+    });
+
+    // 初期ページ
+    const initial = <?!= JSON.stringify(initialPage || 'form') ?>;
+    window.addEventListener('DOMContentLoaded', () => {
+      App.switchPage(initial);
+    });
+  </script>
+</body>
+</html>

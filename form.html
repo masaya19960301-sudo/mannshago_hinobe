@@ -1,0 +1,244 @@
+<div class="container">
+  <div class="card">
+    <h2 class="section-title">日延案件 登録</h2>
+    <form id="record-form" novalidate>
+      <div class="form-group">
+        <label class="form-label" for="deliveryDate">配送日<span class="required-mark">*</span></label>
+        <input type="date" id="deliveryDate" class="form-input" required>
+        <div class="field-error-msg" id="err-deliveryDate"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">伝票No・販売金額<span class="required-mark">*</span></label>
+        <div id="slips-container"></div>
+        <button type="button" id="add-slip-btn" class="btn btn-secondary" style="margin-top:8px;">＋ 行を追加</button>
+        <div class="form-help">伝票Noは6桁の数字。最大10行まで追加できます。</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="storeName">店舗名（数字）<span class="required-mark">*</span></label>
+        <input type="text" id="storeName" class="form-input" inputmode="numeric" pattern="\d*" required>
+        <div class="field-error-msg" id="err-storeName"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="salesPerson">販売担当者（フルネーム）<span class="required-mark">*</span></label>
+        <input type="text" id="salesPerson" class="form-input" required>
+        <div class="form-help">空白を含めずに入力してください</div>
+        <div class="field-error-msg" id="err-salesPerson"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="customerName">お客様名（フルネーム）<span class="required-mark">*</span></label>
+        <input type="text" id="customerName" class="form-input" required>
+        <div class="form-help">空白を含めずに入力してください</div>
+        <div class="field-error-msg" id="err-customerName"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="reason">理由<span class="required-mark">*</span></label>
+        <select id="reason" class="form-select" required>
+          <option value="">選択してください</option>
+        </select>
+        <div class="field-error-msg" id="err-reason"></div>
+      </div>
+
+      <button type="submit" id="submit-btn" class="btn btn-primary">登録する</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const FormPage = (function() {
+  const MAX_SLIPS = 10;
+  let slipCount = 0;
+  let reasonsLoaded = false;
+
+  function createSlipRow() {
+    if (slipCount >= MAX_SLIPS) return;
+    slipCount++;
+    const container = document.getElementById('slips-container');
+    const row = document.createElement('div');
+    row.className = 'slip-row';
+    row.innerHTML = `
+      <input type="text" class="form-input slip-input slip-no" inputmode="numeric" maxlength="6" placeholder="伝票No 6桁">
+      <input type="number" class="form-input amount-input slip-amount" inputmode="numeric" min="0" step="1" placeholder="販売金額">
+      <button type="button" class="remove-btn" aria-label="この行を削除">🗑</button>
+    `;
+    container.appendChild(row);
+    row.querySelector('.remove-btn').addEventListener('click', () => {
+      if (slipCount > 1) {
+        row.remove();
+        slipCount--;
+        updateRemoveButtons();
+        updateAddButton();
+      }
+    });
+    updateRemoveButtons();
+    updateAddButton();
+  }
+
+  function updateRemoveButtons() {
+    const rows = document.querySelectorAll('#slips-container .slip-row');
+    rows.forEach(r => {
+      const btn = r.querySelector('.remove-btn');
+      btn.disabled = rows.length <= 1;
+    });
+  }
+
+  function updateAddButton() {
+    document.getElementById('add-slip-btn').disabled = slipCount >= MAX_SLIPS;
+  }
+
+  function loadReasons() {
+    google.script.run
+      .withSuccessHandler(res => {
+        const sel = document.getElementById('reason');
+        const current = sel.value;
+        sel.innerHTML = '<option value="">選択してください</option>';
+        if (res && res.success) {
+          res.reasons.forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = r;
+            sel.appendChild(opt);
+          });
+          if (current && res.reasons.indexOf(current) !== -1) sel.value = current;
+        }
+        reasonsLoaded = true;
+      })
+      .withFailureHandler(err => {
+        App.showToast('理由の取得に失敗: ' + err.message, 'error');
+      })
+      .getReasons();
+  }
+
+  function setFieldError(id, msg) {
+    const input = document.getElementById(id);
+    const err = document.getElementById('err-' + id);
+    if (msg) {
+      input.classList.add('input-error');
+      if (err) { err.textContent = msg; err.classList.add('show'); }
+    } else {
+      input.classList.remove('input-error');
+      if (err) { err.textContent = ''; err.classList.remove('show'); }
+    }
+  }
+
+  function clearErrors() {
+    ['deliveryDate', 'storeName', 'salesPerson', 'customerName', 'reason']
+      .forEach(id => setFieldError(id, ''));
+    document.querySelectorAll('.slip-row .form-input').forEach(i => i.classList.remove('input-error'));
+  }
+
+  function hasWhitespace(s) { return /[\s　]/.test(s); }
+
+  function validate() {
+    clearErrors();
+    let ok = true;
+    const data = {};
+
+    const deliveryDate = document.getElementById('deliveryDate').value;
+    if (!deliveryDate) { setFieldError('deliveryDate', '配送日を選択してください'); ok = false; }
+    data.deliveryDate = deliveryDate;
+
+    // slips
+    const slips = [];
+    const rows = document.querySelectorAll('#slips-container .slip-row');
+    let firstSlipError = null;
+    rows.forEach((row, idx) => {
+      const noInput = row.querySelector('.slip-no');
+      const amountInput = row.querySelector('.slip-amount');
+      const no = noInput.value.trim();
+      const amount = amountInput.value.trim();
+      let rowOk = true;
+      if (!/^\d{6}$/.test(no)) {
+        noInput.classList.add('input-error');
+        rowOk = false;
+        if (!firstSlipError) firstSlipError = (idx + 1) + '行目: 伝票Noは6桁の数字で入力してください';
+      }
+      if (amount === '' || isNaN(Number(amount)) || Number(amount) < 0) {
+        amountInput.classList.add('input-error');
+        rowOk = false;
+        if (!firstSlipError) firstSlipError = (idx + 1) + '行目: 販売金額を正しく入力してください';
+      }
+      if (rowOk) slips.push({ slipNo: no, amount: Number(amount) });
+    });
+    if (firstSlipError) { App.showToast(firstSlipError, 'error'); ok = false; }
+    if (slips.length === 0) ok = false;
+    data.slips = slips;
+
+    const storeName = document.getElementById('storeName').value.trim();
+    if (!storeName) { setFieldError('storeName', '店舗名を入力してください'); ok = false; }
+    else if (!/^\d+$/.test(storeName)) { setFieldError('storeName', '店舗名は数字のみで入力してください'); ok = false; }
+    data.storeName = storeName;
+
+    const salesPerson = document.getElementById('salesPerson').value;
+    if (!salesPerson.trim()) { setFieldError('salesPerson', '販売担当者を入力してください'); ok = false; }
+    else if (hasWhitespace(salesPerson)) { setFieldError('salesPerson', '空白を含めることはできません'); ok = false; }
+    data.salesPerson = salesPerson;
+
+    const customerName = document.getElementById('customerName').value;
+    if (!customerName.trim()) { setFieldError('customerName', 'お客様名を入力してください'); ok = false; }
+    else if (hasWhitespace(customerName)) { setFieldError('customerName', '空白を含めることはできません'); ok = false; }
+    data.customerName = customerName;
+
+    const reason = document.getElementById('reason').value;
+    if (!reason) { setFieldError('reason', '理由を選択してください'); ok = false; }
+    data.reason = reason;
+
+    return ok ? data : null;
+  }
+
+  function submit(e) {
+    e.preventDefault();
+    const data = validate();
+    if (!data) return;
+
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = '送信中...';
+
+    google.script.run
+      .withSuccessHandler(res => {
+        btn.disabled = false;
+        btn.textContent = '登録する';
+        if (res && res.success) {
+          App.showToast('登録しました', 'success');
+          resetForm();
+        } else {
+          alert('登録に失敗しました: ' + ((res && res.error) || '不明なエラー'));
+        }
+      })
+      .withFailureHandler(err => {
+        btn.disabled = false;
+        btn.textContent = '登録する';
+        alert('通信エラー: ' + err.message);
+      })
+      .saveRecord(data);
+  }
+
+  function resetForm() {
+    document.getElementById('record-form').reset();
+    document.getElementById('slips-container').innerHTML = '';
+    slipCount = 0;
+    createSlipRow();
+    clearErrors();
+  }
+
+  return {
+    init: function() {
+      createSlipRow();
+      document.getElementById('add-slip-btn').addEventListener('click', createSlipRow);
+      document.getElementById('record-form').addEventListener('submit', submit);
+      loadReasons();
+    },
+    onShow: function() {
+      // 表示のたびに理由を再読込（設定で追加された分を反映）
+      loadReasons();
+    }
+  };
+})();
+
+FormPage.init();
+</script>

@@ -1,0 +1,206 @@
+<div class="container">
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-label">総件数</div>
+      <div class="summary-value"><span id="sum-total-count">-</span><span class="summary-unit">件</span></div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">総日延金額</div>
+      <div class="summary-value"><span id="sum-total-amount">-</span><span class="summary-unit">円</span></div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">当月件数</div>
+      <div class="summary-value"><span id="sum-month-count">-</span><span class="summary-unit">件</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">月別件数</h2>
+    <div class="chart-container">
+      <canvas id="chart-monthly"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">理由別の内訳</h2>
+    <div class="chart-container">
+      <canvas id="chart-reason"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">記録一覧</h2>
+    <div class="table-wrap">
+      <table class="records-table">
+        <thead>
+          <tr>
+            <th>配送日</th>
+            <th>伝票No</th>
+            <th>金額合計</th>
+            <th>店舗</th>
+            <th>担当者</th>
+            <th>お客様名</th>
+            <th>理由</th>
+          </tr>
+        </thead>
+        <tbody id="records-tbody">
+          <tr><td colspan="7" class="loading">読み込み中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const DashboardPage = (function() {
+  let monthlyChart = null;
+  let reasonChart = null;
+  let loadedOnce = false;
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function getYearMonth(dateStr) {
+    if (!dateStr) return '';
+    const m = String(dateStr).match(/^(\d{4})-(\d{2})/);
+    return m ? m[1] + '-' + m[2] : '';
+  }
+
+  function render(records) {
+    // サマリー
+    const totalCount = records.length;
+    const totalAmount = records.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0);
+    const now = new Date();
+    const thisYM = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const monthCount = records.filter(r => getYearMonth(r.deliveryDate) === thisYM).length;
+
+    document.getElementById('sum-total-count').textContent = formatNumber(totalCount);
+    document.getElementById('sum-total-amount').textContent = formatNumber(totalAmount);
+    document.getElementById('sum-month-count').textContent = formatNumber(monthCount);
+
+    renderMonthlyChart(records);
+    renderReasonChart(records);
+    renderTable(records);
+  }
+
+  function renderMonthlyChart(records) {
+    const counts = {};
+    records.forEach(r => {
+      const ym = getYearMonth(r.deliveryDate);
+      if (ym) counts[ym] = (counts[ym] || 0) + 1;
+    });
+    const labels = Object.keys(counts).sort();
+    const data = labels.map(l => counts[l]);
+
+    if (monthlyChart) monthlyChart.destroy();
+    const ctx = document.getElementById('chart-monthly').getContext('2d');
+    monthlyChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: '件数',
+          data: data,
+          backgroundColor: '#F97316',
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+      }
+    });
+  }
+
+  function renderReasonChart(records) {
+    const counts = {};
+    records.forEach(r => {
+      const k = r.reason || '(未設定)';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const labels = Object.keys(counts);
+    const data = labels.map(l => counts[l]);
+    const colors = ['#F97316', '#FB923C', '#FDBA74', '#EA580C', '#C2410C', '#9A3412', '#FCD34D', '#FBBF24'];
+
+    if (reasonChart) reasonChart.destroy();
+    const ctx = document.getElementById('chart-reason').getContext('2d');
+    reasonChart = new Chart(ctx, {
+      type: 'pie',
+      data: {
+        labels: labels,
+        datasets: [{
+          data: data,
+          backgroundColor: labels.map((_, i) => colors[i % colors.length])
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 14, font: { size: 12 } } }
+        }
+      }
+    });
+  }
+
+  function renderTable(records) {
+    const tbody = document.getElementById('records-tbody');
+    if (records.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">記録がまだありません</td></tr>';
+      return;
+    }
+    // 新しい順 = タイムスタンプ降順
+    const sorted = records.slice().sort((a, b) => {
+      const ta = a.timestamp || '';
+      const tb = b.timestamp || '';
+      return tb.localeCompare(ta);
+    });
+    tbody.innerHTML = sorted.map(r => `
+      <tr>
+        <td>${escapeHtml(r.deliveryDate)}</td>
+        <td>${escapeHtml(r.slipNumbers)}</td>
+        <td>¥${formatNumber(r.totalAmount)}</td>
+        <td>${escapeHtml(r.storeName)}</td>
+        <td>${escapeHtml(r.salesPerson)}</td>
+        <td>${escapeHtml(r.customerName)}</td>
+        <td>${escapeHtml(r.reason)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function load() {
+    const tbody = document.getElementById('records-tbody');
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">読み込み中...</td></tr>';
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.success) {
+          render(res.records || []);
+          loadedOnce = true;
+        } else {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">読み込みに失敗しました: ' + escapeHtml((res && res.error) || '') + '</td></tr>';
+        }
+      })
+      .withFailureHandler(err => {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">通信エラー: ' + escapeHtml(err.message) + '</td></tr>';
+      })
+      .getRecords();
+  }
+
+  return {
+    onShow: function() {
+      load();
+    }
+  };
+})();
+</script>
