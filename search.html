@@ -70,6 +70,7 @@
 const SearchPage = (function() {
   let allRecords = [];
   let loaded = false;
+  let pendingQuery = null;
 
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -183,7 +184,17 @@ const SearchPage = (function() {
     onShow: function() {
       // 表示のたびに最新を再取得（編集後の差分反映）
       loaded = false;
-      load();
+      const queryToRun = pendingQuery;
+      pendingQuery = null;
+      if (queryToRun) {
+        document.getElementById('search-input').value = queryToRun;
+        load(() => search());
+      } else {
+        load();
+      }
+    },
+    setPendingQuery: function(q) {
+      pendingQuery = String(q || '');
     }
   };
 })();

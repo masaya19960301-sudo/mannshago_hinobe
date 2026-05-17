@@ -153,6 +153,11 @@ function saveRecord(data) {
     const ss = getSpreadsheet_();
     const sheet = ss.getSheetByName(SHEET_RECORDS);
 
+    const dup = findDuplicateSlip_(data.slips, null);
+    if (dup) {
+      return { success: false, duplicate: dup };
+    }
+
     const row = buildRow_(data, new Date());
     sheet.appendRow(row);
     return { success: true, message: '登録しました' };
@@ -185,6 +190,11 @@ function updateRecord(rowIndex, data) {
       return { success: false, error: '指定行が存在しません' };
     }
 
+    const dup = findDuplicateSlip_(data.slips, idx);
+    if (dup) {
+      return { success: false, duplicate: dup };
+    }
+
     // 既存タイムスタンプ（列A）を保持
     const existingTimestamp = sheet.getRange(idx, 1).getValue();
     const ts = existingTimestamp instanceof Date ? existingTimestamp : new Date();
@@ -194,6 +204,53 @@ function updateRecord(rowIndex, data) {
   } catch (err) {
     return { success: false, error: '更新中にエラーが発生しました: ' + err.message };
   }
+}
+
+/**
+ * 伝票Noの重複を検出する。
+ * @param {Array<{slipNo:string,amount:number}>} slips - 入力された伝票
+ * @param {number|null} excludeRowIndex - 自身のレコード（編集時）を除外する行番号
+ * @return {object|null} 重複が見つかれば { slipNo, record }、なければ null
+ */
+function findDuplicateSlip_(slips, excludeRowIndex) {
+  const ss = getSpreadsheet_();
+  const sheet = ss.getSheetByName(SHEET_RECORDS);
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  const numRows = sheet.getLastRow() - 1;
+  const values = sheet.getRange(2, 1, numRows, RECORDS_HEADERS.length).getValues();
+  const tz = Session.getScriptTimeZone();
+  const searchSet = {};
+  slips.forEach(s => { searchSet[String(s.slipNo).trim()] = true; });
+
+  for (let i = 0; i < values.length; i++) {
+    const rowIndex = i + 2;
+    if (excludeRowIndex && rowIndex === excludeRowIndex) continue;
+    const slipCell = String(values[i][2] || '');
+    const existingSlips = slipCell.split('/');
+    for (let j = 0; j < existingSlips.length; j++) {
+      const candidate = existingSlips[j].trim();
+      if (!candidate) continue;
+      if (searchSet[candidate]) {
+        return {
+          slipNo: candidate,
+          record: {
+            rowIndex: rowIndex,
+            timestamp: values[i][0] instanceof Date ? values[i][0].toISOString() : String(values[i][0] || ''),
+            deliveryDate: values[i][1] instanceof Date ? Utilities.formatDate(values[i][1], tz, 'yyyy-MM-dd') : String(values[i][1] || ''),
+            slipNumbers: slipCell,
+            totalAmount: Number(values[i][3]) || 0,
+            storeName: String(values[i][4] == null ? '' : values[i][4]),
+            salesPerson: String(values[i][5] || ''),
+            customerName: String(values[i][6] || ''),
+            reason: String(values[i][7] || ''),
+            postDelayDateStatus: String(values[i][8] || ''),
+            postDelayDate: values[i][9] instanceof Date ? Utilities.formatDate(values[i][9], tz, 'yyyy-MM-dd') : String(values[i][9] == null ? '' : values[i][9])
+          }
+        };
+      }
+    }
+  }
+  return null;
 }
 
 /**

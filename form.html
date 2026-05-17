@@ -74,6 +74,35 @@
   </div>
 </div>
 
+<div id="dup-modal" class="modal-backdrop" style="display:none;" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <div class="modal-header">重複データが見つかりました</div>
+    <div class="modal-body">
+      <div>
+        伝票No <span id="dup-slip" class="dup-slip-badge"></span> は既に登録されています。
+      </div>
+      <div class="dup-meta">
+        <dl>
+          <dt>登録日時</dt><dd id="dup-timestamp"></dd>
+          <dt>配送日</dt><dd id="dup-deliveryDate"></dd>
+          <dt>伝票No</dt><dd id="dup-slipNumbers"></dd>
+          <dt>金額合計</dt><dd id="dup-totalAmount"></dd>
+          <dt>店舗</dt><dd id="dup-storeName"></dd>
+          <dt>担当者</dt><dd id="dup-salesPerson"></dd>
+          <dt>お客様名</dt><dd id="dup-customerName"></dd>
+          <dt>理由</dt><dd id="dup-reason"></dd>
+          <dt>日延後</dt><dd id="dup-postDelay"></dd>
+        </dl>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" id="dup-edit-btn" class="btn btn-primary">元データを編集する</button>
+      <button type="button" id="dup-clear-btn" class="btn btn-danger">入力をクリアする</button>
+      <button type="button" id="dup-close-btn" class="modal-close-link">閉じる（入力内容は保持）</button>
+    </div>
+  </div>
+</div>
+
 <style>
   .status-toggle {
     display: flex;
@@ -289,6 +318,8 @@ const FormPage = (function() {
         App.showToast(isEdit ? '更新しました' : '登録しました', 'success');
         exitEditMode();
         resetForm();
+      } else if (res && res.duplicate) {
+        showDuplicateModal(res.duplicate);
       } else {
         alert((isEdit ? '更新' : '登録') + 'に失敗しました: ' + ((res && res.error) || '不明なエラー'));
       }
@@ -306,6 +337,41 @@ const FormPage = (function() {
       google.script.run.withSuccessHandler(handler).withFailureHandler(failure)
         .saveRecord(data);
     }
+  }
+
+  function formatTimestamp(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString('ja-JP', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function showDuplicateModal(dup) {
+    const r = dup.record || {};
+    const postDelay = r.postDelayDate
+      ? (r.postDelayDateStatus === '決定' ? r.postDelayDate : '未定: ' + r.postDelayDate)
+      : '-';
+    document.getElementById('dup-slip').textContent = dup.slipNo || '';
+    document.getElementById('dup-timestamp').textContent = formatTimestamp(r.timestamp);
+    document.getElementById('dup-deliveryDate').textContent = r.deliveryDate || '-';
+    document.getElementById('dup-slipNumbers').textContent = r.slipNumbers || '-';
+    document.getElementById('dup-totalAmount').textContent = '¥' + Number(r.totalAmount || 0).toLocaleString('ja-JP');
+    document.getElementById('dup-storeName').textContent = r.storeName || '-';
+    document.getElementById('dup-salesPerson').textContent = r.salesPerson || '-';
+    document.getElementById('dup-customerName').textContent = r.customerName || '-';
+    document.getElementById('dup-reason').textContent = r.reason || '-';
+    document.getElementById('dup-postDelay').textContent = postDelay;
+
+    const modal = document.getElementById('dup-modal');
+    modal.style.display = 'flex';
+    modal.dataset.slipNo = dup.slipNo || '';
+  }
+
+  function hideDuplicateModal() {
+    document.getElementById('dup-modal').style.display = 'none';
   }
 
   function resetForm() {
@@ -405,6 +471,27 @@ const FormPage = (function() {
         exitEditMode();
         resetForm();
         App.showToast('編集をキャンセルしました');
+      });
+
+      // 重複モーダルのボタン
+      document.getElementById('dup-edit-btn').addEventListener('click', () => {
+        const slipNo = document.getElementById('dup-modal').dataset.slipNo || '';
+        hideDuplicateModal();
+        exitEditMode();
+        resetForm();
+        if (typeof SearchPage !== 'undefined') {
+          SearchPage.setPendingQuery(slipNo);
+        }
+        App.switchPage('search');
+      });
+      document.getElementById('dup-clear-btn').addEventListener('click', () => {
+        hideDuplicateModal();
+        exitEditMode();
+        resetForm();
+        App.showToast('入力をクリアしました');
+      });
+      document.getElementById('dup-close-btn').addEventListener('click', () => {
+        hideDuplicateModal();
       });
     },
     onShow: function() {
